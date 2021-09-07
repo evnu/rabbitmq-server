@@ -85,6 +85,29 @@ To go back to aggregated metrics on-the-fly, run the following command:
 rabbitmqctl eval 'application:set_env(rabbitmq_prometheus, return_per_object_metrics, false).'
 ```
 
+## Reducing number of metrics
+
+As mentioned in the previous section, returning a lot of metrics is a computationally intensive process. 
+
+Default endpoints `/metrics` and `/metrics/per-object` expose every possible, including low-level stats like Erlang VM stats and higher-level things like queue stats.
+
+Using aggregation is one way to reduce the number of metrics and somewhat reduce CPU usage. 
+
+It's also possible to completely disable some groups of higher-level metrics that provide excessive level of detail, or pose no interest at all in given circumstances. For queue metrics it's also possible to filter on a per-vhost basis - that can be useful if there is a way to choose less interesting queues (like one-off transient queues for RPC) and don't include them in the output.
+
+Those customizations can be applied to default endpoints using a configuration file. The following config snippet will make default endpoints to expose just enough information to get a number of messages and and a number of consumers for each queue, but only in the default vhost `/`:
+
+```ini
+prometheus.core_metrics.default_families.1 = queue_coarse_metrics
+prometheus.core_metrics.default_families.2 = queue_consumer_count
+prometheus.core_metrics.default_vhosts.1 = /
+```
+
+Even when the number of metrics for the default endpoints is reduced, it's possible to get any combination of those configurable metrics via a separate endpoint, where HTTP `GET`-parameters determine what exactly should be returned. E.g. scraping `/metrics/core?vhost=vhost-1&vhost=vhost-2&family=queue_coarse_metrics&family=queue_consumer_count`. will only return requested metrics (and not, for example, low-level Erlang VM metrics). It supports the following parameters:
+
+* Zero or more `family` - if given, only these metric families will be returned. The full list is documented in [metrics](metrics.md), and it's the same names that are being used in the config file.
+* Zero or more `vhost` - if it's given, queue related metrics (`queue_coarse_metrics`, `queue_coarse_metrics` and `queue_metrics`) will be returned only for given vhost(s).
+* Optional `per-object` - if it's `1` or `true`, per-object values without aggregation will be returned.
 
 ## Contributing
 

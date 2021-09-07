@@ -276,5 +276,27 @@
                             {ssl_config, [{cowboy_opts, [{max_keepalive, 120}]}]}
                            ]}
     ], [rabbitmq_prometheus]
-   }
+   },
+
+ {core_metrics_default_families,
+  "prometheus.core_metrics.default_families.1 = queue_coarse_metrics
+   prometheus.core_metrics.default_families.2 = queue_consumer_count",
+  [
+   {rabbitmq_prometheus, [
+                          {core_metrics_default_families, [queue_coarse_metrics, queue_consumer_count]}
+                         ]}
+  ],
+  [rabbitmq_prometheus]
+ },
+
+ {core_metrics_default_vhosts,
+  "prometheus.core_metrics.default_vhosts.1 = /
+   prometheus.core_metrics.default_vhosts.2 = other-vhost",
+  [
+   {rabbitmq_prometheus, [
+                          {core_metrics_default_vhosts, [<<"/">>, <<"other-vhost">>]}
+                         ]}
+  ],
+  [rabbitmq_prometheus]
+ }
 ].

@@ -26,6 +26,7 @@
 %% we prepend rabbitmq_ to all metrics emitted by this collector.
 %% Some metrics are for Erlang (erlang_), Mnesia (schema_db_) or the System (io_),
 %% as observed by RabbitMQ.
+%% NOTE This is used by ?METRIC_NAME() macro, erlang-ls incorrectly thinks it's unused.
 -define(METRIC_NAME_PREFIX, "rabbitmq_").
 
 %% ==The source of these metrics can be found in the rabbit_core_metrics module==
@@ -52,37 +53,8 @@
 -define(MICROSECOND, 1000000).
 
 -define(METRICS_RAW, [
-    {channel_metrics, [
-        {2, undefined, channel_consumers, gauge, "Consumers on a channel", consumer_count},
-        {2, undefined, channel_messages_unacked, gauge, "Delivered but not yet acknowledged messages", messages_unacknowledged},
-        {2, undefined, channel_messages_unconfirmed, gauge, "Published but not yet confirmed messages", messages_unconfirmed},
-        {2, undefined, channel_messages_uncommitted, gauge, "Messages received in a transaction but not yet committed", messages_uncommitted},
-        {2, undefined, channel_acks_uncommitted, gauge, "Message acknowledgements in a transaction not yet committed", acks_uncommitted},
-        {2, undefined, consumer_prefetch, gauge, "Limit of unacknowledged messages for each consumer", prefetch_count},
-        {2, undefined, channel_prefetch, gauge, "Total limit of unacknowledged messages for all consumers on a channel", global_prefetch_count}
-    ]},
 
-    {channel_exchange_metrics, [
-        {2, undefined, channel_messages_published_total, counter, "Total number of messages published into an exchange on a channel"},
-        {3, undefined, channel_messages_confirmed_total, counter, "Total number of messages published into an exchange and confirmed on the channel"},
-        {4, undefined, channel_messages_unroutable_returned_total, counter, "Total number of messages published as mandatory into an exchange and returned to the publisher as unroutable"},
-        {5, undefined, channel_messages_unroutable_dropped_total, counter, "Total number of messages published as non-mandatory into an exchange and dropped as unroutable"}
-    ]},
-
-    {channel_process_metrics, [
-        {2, undefined, channel_process_reductions_total, counter, "Total number of channel process reductions"}
-    ]},
-
-    {channel_queue_metrics, [
-        {2, undefined, channel_get_ack_total, counter, "Total number of messages fetched with basic.get in manual acknowledgement mode"},
-        {3, undefined, channel_get_total, counter, "Total number of messages fetched with basic.get in automatic acknowledgement mode"},
-        {4, undefined, channel_messages_delivered_ack_total, counter, "Total number of messages delivered to consumers in manual acknowledgement mode"},
-        {5, undefined, channel_messages_delivered_total, counter, "Total number of messages delivered to consumers in automatic acknowledgement mode"},
-        {6, undefined, channel_messages_redelivered_total, counter, "Total number of messages redelivered to consumers"},
-        {7, undefined, channel_messages_acked_total, counter, "Total number of messages acknowledged by consumers"},
-        {8, undefined, channel_get_empty_total, counter, "Total number of times basic.get operations fetched no message"}
-    ]},
-
+%%% Those are global, i.e. they contain no reference to queue/vhost/channel
     {connection_churn_metrics, [
         {2, undefined, connections_opened_total, counter, "Total number of connections opened"},
         {3, undefined, connections_closed_total, counter, "Total number of connections closed or terminated"},
@@ -92,24 +64,6 @@
         {7, undefined, queues_created_total, counter, "Total number of queues created"},
         {8, undefined, queues_deleted_total, counter, "Total number of queues deleted"}
     ]},
-
-    {connection_coarse_metrics, [
-        {2, undefined, connection_incoming_bytes_total, counter, "Total number of bytes received on a connection"},
-        {3, undefined, connection_outgoing_bytes_total, counter, "Total number of bytes sent on a connection"},
-        {4, undefined, connection_process_reductions_total, counter, "Total number of connection process reductions"}
-    ]},
-
-    {connection_metrics, [
-        {2, undefined, connection_incoming_packets_total, counter, "Total number of packets received on a connection", recv_cnt},
-        {2, undefined, connection_outgoing_packets_total, counter, "Total number of packets sent on a connection", send_cnt},
-        {2, undefined, connection_pending_packets, gauge, "Number of packets waiting to be sent on a connection", send_pend},
-        {2, undefined, connection_channels, gauge, "Channels on a connection", channels}
-    ]},
-
-    {channel_queue_exchange_metrics, [
-        {2, undefined, queue_messages_published_total, counter, "Total number of messages published to queues"}
-    ]},
-
     {node_coarse_metrics, [
         {2, undefined, process_open_fds, gauge, "Open file descriptors", fd_used},
         {2, undefined, process_open_tcp_sockets, gauge, "Open TCP sockets", sockets_used},
@@ -120,7 +74,6 @@
         {2, undefined, erlang_gc_reclaimed_bytes_total, counter, "Total number of bytes of memory reclaimed by Erlang garbage collector", gc_bytes_reclaimed},
         {2, undefined, erlang_scheduler_context_switches_total, counter, "Total number of Erlang scheduler context switches", context_switches}
     ]},
-
     {node_metrics, [
         {2, undefined, process_max_fds, gauge, "Open file descriptors limit", fd_total},
         {2, undefined, process_max_tcp_sockets, gauge, "Open TCP sockets limit", sockets_total},
@@ -164,11 +117,16 @@
         {7, ?MILLISECOND, raft_entry_commit_latency_seconds, gauge, "Time taken for a log entry to be committed"}
     ]},
 
+%%% Those metrics have reference only to a queue name. This is the only group where filtering (e.g. by vhost) makes sense.
     {queue_coarse_metrics, [
         {2, undefined, queue_messages_ready, gauge, "Messages ready to be delivered to consumers"},
         {3, undefined, queue_messages_unacked, gauge, "Messages delivered to consumers but not yet acknowledged"},
         {4, undefined, queue_messages, gauge, "Sum of ready and unacknowledged messages - total queue depth"},
         {5, undefined, queue_process_reductions_total, counter, "Total number of queue process reductions"}
+    ]},
+
+    {queue_consumer_count, [
+        {2, undefined, queue_consumers, gauge, "Consumers on a queue", consumers}
     ]},
 
     {queue_metrics, [
@@ -191,6 +149,57 @@
         {2, undefined, queue_disk_writes_total, counter, "Total number of times queue wrote messages to disk", disk_writes}
     ]},
 
+%%% Metrics that contain reference to a channel. Some of them also have
+%%% a queue name, but in this case filtering on it doesn't make any
+%%% sense, as the queue is not an object of interest here.
+    {channel_metrics, [
+        {2, undefined, channel_consumers, gauge, "Consumers on a channel", consumer_count},
+        {2, undefined, channel_messages_unacked, gauge, "Delivered but not yet acknowledged messages", messages_unacknowledged},
+        {2, undefined, channel_messages_unconfirmed, gauge, "Published but not yet confirmed messages", messages_unconfirmed},
+        {2, undefined, channel_messages_uncommitted, gauge, "Messages received in a transaction but not yet committed", messages_uncommitted},
+        {2, undefined, channel_acks_uncommitted, gauge, "Message acknowledgements in a transaction not yet committed", acks_uncommitted},
+        {2, undefined, consumer_prefetch, gauge, "Limit of unacknowledged messages for each consumer", prefetch_count},
+        {2, undefined, channel_prefetch, gauge, "Total limit of unacknowledged messages for all consumers on a channel", global_prefetch_count}
+    ]},
+
+    {channel_exchange_metrics, [
+        {2, undefined, channel_messages_published_total, counter, "Total number of messages published into an exchange on a channel"},
+        {3, undefined, channel_messages_confirmed_total, counter, "Total number of messages published into an exchange and confirmed on the channel"},
+        {4, undefined, channel_messages_unroutable_returned_total, counter, "Total number of messages published as mandatory into an exchange and returned to the publisher as unroutable"},
+        {5, undefined, channel_messages_unroutable_dropped_total, counter, "Total number of messages published as non-mandatory into an exchange and dropped as unroutable"}
+    ]},
+
+    {channel_process_metrics, [
+        {2, undefined, channel_process_reductions_total, counter, "Total number of channel process reductions"}
+    ]},
+
+    {channel_queue_metrics, [
+        {2, undefined, channel_get_ack_total, counter, "Total number of messages fetched with basic.get in manual acknowledgement mode"},
+        {3, undefined, channel_get_total, counter, "Total number of messages fetched with basic.get in automatic acknowledgement mode"},
+        {4, undefined, channel_messages_delivered_ack_total, counter, "Total number of messages delivered to consumers in manual acknowledgement mode"},
+        {5, undefined, channel_messages_delivered_total, counter, "Total number of messages delivered to consumers in automatic acknowledgement mode"},
+        {6, undefined, channel_messages_redelivered_total, counter, "Total number of messages redelivered to consumers"},
+        {7, undefined, channel_messages_acked_total, counter, "Total number of messages acknowledged by consumers"},
+        {8, undefined, channel_get_empty_total, counter, "Total number of times basic.get operations fetched no message"}
+    ]},
+
+    {connection_coarse_metrics, [
+        {2, undefined, connection_incoming_bytes_total, counter, "Total number of bytes received on a connection"},
+        {3, undefined, connection_outgoing_bytes_total, counter, "Total number of bytes sent on a connection"},
+        {4, undefined, connection_process_reductions_total, counter, "Total number of connection process reductions"}
+    ]},
+
+    {connection_metrics, [
+        {2, undefined, connection_incoming_packets_total, counter, "Total number of packets received on a connection", recv_cnt},
+        {2, undefined, connection_outgoing_packets_total, counter, "Total number of packets sent on a connection", send_cnt},
+        {2, undefined, connection_pending_packets, gauge, "Number of packets waiting to be sent on a connection", send_pend},
+        {2, undefined, connection_channels, gauge, "Channels on a connection", channels}
+    ]},
+
+    {channel_queue_exchange_metrics, [
+        {2, undefined, queue_messages_published_total, counter, "Total number of messages published to queues"}
+    ]},
+
     {auth_attempt_metrics, [
         {2, undefined, auth_attempts_total, counter, "Total number of authorization attempts"},
         {3, undefined, auth_attempts_succeeded_total, counter, "Total number of successful authentication attempts"},
@@ -202,7 +211,6 @@
         {3, undefined, auth_attempts_detailed_succeeded_total, counter, "Total number of successful authorization attempts with source info"},
         {4, undefined, auth_attempts_detailed_failed_total, counter, "Total number of failed authorization attempts with source info"}
     ]}
-
 ]).
 
 -define(TOTALS, [
@@ -222,29 +230,47 @@ register() ->
 
 deregister_cleanup(_) -> ok.
 
+collect_mf('core', Callback) ->
+    collect(per_object_from_pdict(false), vhosts_filter_from_pdict(), enabled_mfs_from_pdict(), Callback),
+    ok;
 collect_mf('per-object', Callback) ->
-    collect(true, Callback);
+    collect(true, vhosts_filter_from_app(), enabled_mfs_from_app(), Callback),
+    totals(Callback),
+    ok;
 collect_mf(_Registry, Callback) ->
     PerObjectMetrics = application:get_env(rabbitmq_prometheus, return_per_object_metrics, false),
-    collect(PerObjectMetrics, Callback).
+    VHostsFilter = vhosts_filter_from_app(),
+    EnabledMFs = enabled_mfs_from_app(),
+    collect(PerObjectMetrics, VHostsFilter, EnabledMFs, Callback),
+    totals(Callback),
+    ok.
 
-collect(PerObjectMetrics, Callback) ->
+collect(PerObjectMetrics, VHostsFilter, IncludedMFs, Callback) ->
     [begin
-         Data = get_data(Table, PerObjectMetrics),
+         Data = get_data(Table, PerObjectMetrics, VHostsFilter),
          mf(Callback, Contents, Data)
-     end || {Table, Contents} <- ?METRICS_RAW, include_when_per_object_metrics(PerObjectMetrics, Table)],
+     end || {Table, Contents} <- IncludedMFs, not mutually_exclusive_mf(PerObjectMetrics, Table, IncludedMFs)].
+
+totals(Callback) ->
     [begin
          Size = ets:info(Table, size),
          mf_totals(Callback, Name, Type, Help, Size)
      end || {Table, Name, Type, Help} <- ?TOTALS],
     add_metric_family(build_info(), Callback),
-    add_metric_family(identity_info(), Callback),
-    ok.
+    add_metric_family(identity_info(), Callback).
 
-include_when_per_object_metrics(false, auth_attempt_detailed_metrics) ->
-    false;
-include_when_per_object_metrics(_, _) ->
-    true.
+%% Aggregated `auth``_attempt_detailed_metrics` and
+%% `auth_attempt_metrics` are the same numbers. The former is just
+%% more computationally intensive.
+mutually_exclusive_mf(false, auth_attempt_detailed_metrics, _) ->
+    true;
+%% `queue_consumer_count` is a strict subset of queue metrics. They
+%% read from the same table, but `queue_consumer_count` skips a lot of
+%% `proplists:get_value/2` calls.
+mutually_exclusive_mf(_, queue_consumer_count, MFs) ->
+    lists:keymember(queue_metrics, 1, MFs);
+mutually_exclusive_mf(_, _, _) ->
+    false.
 
 build_info() ->
     ProductInfo = rabbit:product_info(),
@@ -416,7 +442,7 @@ emit_gauge_metric_if_defined(Labels, Value) ->
       gauge_metric(Labels, Value)
   end.
 
-get_data(connection_metrics = Table, false) ->
+get_data(connection_metrics = Table, false, _) ->
     {Table, A1, A2, A3, A4} = ets:foldl(fun({_, Props}, {T, A1, A2, A3, A4}) ->
                                             {T,
                                              sum(proplists:get_value(recv_cnt, Props), A1),
@@ -425,7 +451,7 @@ get_data(connection_metrics = Table, false) ->
                                              sum(proplists:get_value(channels, Props), A4)}
                                     end, empty(Table), Table),
     [{Table, [{recv_cnt, A1}, {send_cnt, A2}, {send_pend, A3}, {channels, A4}]}];
-get_data(channel_metrics = Table, false) ->
+get_data(channel_metrics = Table, false, _) ->
     {Table, A1, A2, A3, A4, A5, A6, A7} =
         ets:foldl(fun({_, Props}, {T, A1, A2, A3, A4, A5, A6, A7}) ->
                           {T,
@@ -440,10 +466,24 @@ get_data(channel_metrics = Table, false) ->
      [{Table, [{consumer_count, A1}, {messages_unacknowledged, A2}, {messages_unconfirmed, A3},
                {messages_uncommitted, A4}, {acks_uncommitted, A5}, {prefetch_count, A6},
                {global_prefetch_count, A7}]}];
-get_data(queue_metrics = Table, false) ->
+get_data(queue_consumer_count = MF, false, VHostsFilter) ->
+    Table = queue_metrics, %% Real table name
+    {_, A1} = ets:foldl(fun
+                              ({#resource{kind = queue, virtual_host = VHost}, _, _}, Acc) when is_map(VHostsFilter), map_get(VHost, VHostsFilter) == false ->
+                                 Acc;
+                             ({_, Props, _}, {T, A1}) ->
+                                 {T,
+                                  sum(proplists:get_value(consumers, Props), A1)
+                                 }
+                         end, empty(MF), Table),
+    [{Table, [{consumers, A1}]}];
+get_data(queue_metrics = Table, false, VHostsFilter) ->
     {Table, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16} =
-        ets:foldl(fun({_, Props, _}, {T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10,
-                                      A11, A12, A13, A14, A15, A16}) ->
+        ets:foldl(fun
+                      ({#resource{kind = queue, virtual_host = VHost}, _, _}, Acc) when is_map(VHostsFilter), map_get(VHost, VHostsFilter) == false ->
+                          Acc;
+                      ({_, Props, _}, {T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10,
+                                       A11, A12, A13, A14, A15, A16}) ->
                           {T,
                            sum(proplists:get_value(consumers, Props), A1),
                            sum(proplists:get_value(consumer_utilisation, Props), A2),
@@ -470,14 +510,18 @@ get_data(queue_metrics = Table, false) ->
                {message_bytes_ready, A11}, {message_bytes_unacknowledged, A12},
                {messages_paged_out, A13}, {message_bytes_paged_out, A14},
                {disk_reads, A15}, {disk_writes, A16}]}];
-get_data(Table, false) when Table == channel_exchange_metrics;
+get_data(Table, false, VHostsFilter) when Table == channel_exchange_metrics;
                            Table == queue_coarse_metrics;
                            Table == channel_queue_metrics;
                            Table == connection_coarse_metrics;
                            Table == channel_queue_exchange_metrics;
                            Table == ra_metrics;
                            Table == channel_process_metrics ->
-    Result = ets:foldl(fun({_, V1}, {T, A1}) ->
+    Result = ets:foldl(fun
+                  %% For queue_coarse_metrics
+                  ({#resource{kind = queue, virtual_host = VHost}, _, _, _, _}, Acc) when is_map(VHostsFilter), map_get(VHost, VHostsFilter) == false ->
+                               Acc;
+                  ({_, V1}, {T, A1}) ->
                        {T, V1 + A1};
                   ({_, V1, _}, {T, A1}) ->
                        {T, V1 + A1};
@@ -503,7 +547,24 @@ get_data(Table, false) when Table == channel_exchange_metrics;
         _ ->
             [Result]
     end;
-get_data(Table, _) ->
+get_data(queue_coarse_metrics = Table, true, VHostsFilter) when is_map(VHostsFilter) ->
+    ets:foldl(fun
+                  ({#resource{kind = queue, virtual_host = VHost}, _, _, _, _} = Row, Acc) when map_get(VHost, VHostsFilter) ->
+                      [Row|Acc];
+                  (_, Acc) ->
+                      Acc
+              end, [], Table);
+get_data(MF, true, VHostsFilter) when is_map(VHostsFilter), MF == queue_metrics orelse MF == queue_consumer_count ->
+    Table = queue_metrics,
+    ets:foldl(fun
+                  ({#resource{kind = queue, virtual_host = VHost}, _, _} = Row, Acc) when map_get(VHost, VHostsFilter) ->
+                      [Row|Acc];
+                  (_, Acc) ->
+                      Acc
+              end, [], Table);
+get_data(queue_consumer_count, true, _) ->
+    ets:tab2list(queue_metrics);
+get_data(Table, _, _) ->
     ets:tab2list(Table).
 
 division(0, 0) ->
@@ -514,7 +575,7 @@ division(A, B) ->
 accumulate_count_and_sum(Value, {Count, Sum}) ->
     {Count + 1, Sum + Value}.
 
-empty(T) when T == channel_queue_exchange_metrics; T == channel_process_metrics ->
+empty(T) when T == channel_queue_exchange_metrics; T == channel_process_metrics; T == queue_consumer_count ->
     {T, 0};
 empty(T) when T == connection_coarse_metrics; T == auth_attempt_metrics; T == auth_attempt_detailed_metrics ->
     {T, 0, 0, 0};
@@ -533,3 +594,49 @@ sum('', B) ->
     B;
 sum(A, B) ->
     A + B.
+
+enabled_mfs_from_app() ->
+    case application:get_env(rabbitmq_prometheus, core_metrics_default_families) of
+        undefined ->
+            ?METRICS_RAW;
+        {ok, MFNames} ->
+            MFNameSet = sets:from_list(MFNames),
+            [ MF || MF = {Table, _} <- ?METRICS_RAW, sets:is_element(Table, MFNameSet) ]
+    end.
+
+vhosts_filter_from_app() ->
+    case application:get_env(rabbitmq_prometheus, core_metrics_default_vhosts) of
+        undefined ->
+            false;
+        {ok, VHostNames} ->
+            %% Having both excluded and included hosts in this map makes some guards easier (or even possible).
+            All = maps:from_list([ {VHost, false} || VHost <- rabbit_vhost:list()]),
+            Enabled = maps:from_list([ {VHost, true} || VHost <- VHostNames, rabbit_vhost:exists(VHost) ]),
+            maps:merge(All, Enabled)
+    end.
+
+enabled_mfs_from_pdict() ->
+    case get(prometheus_mf_filter) of
+        undefined ->
+            ?METRICS_RAW;
+        MFNames ->
+            MFNameSet = sets:from_list(MFNames),
+            [ MF || MF = {Table, _} <- ?METRICS_RAW, sets:is_element(Table, MFNameSet) ]
+    end.
+
+vhosts_filter_from_pdict() ->
+    case get(prometheus_vhost_filter) of
+        undefined ->
+            false;
+        L ->
+            %% Having both excluded and included hosts in this map makes some guards easier (or even possible).
+            All = maps:from_list([ {VHost, false} || VHost <- rabbit_vhost:list()]),
+            Enabled = maps:from_list([ {VHost, true} || VHost <- L ]),
+            maps:merge(All, Enabled)
+    end.
+
+per_object_from_pdict(Default) ->
+    case get(prometheus_per_object) of
+        undefined -> Default;
+        true -> true
+    end.

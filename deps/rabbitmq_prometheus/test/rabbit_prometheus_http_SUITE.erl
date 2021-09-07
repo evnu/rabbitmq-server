@@ -22,7 +22,8 @@ all() ->
         {group, aggregated_metrics},
         {group, per_object_metrics},
         {group, per_object_endpoint_metrics},
-        {group, commercial}
+        {group, commercial},
+        {group, core_metrics}
     ].
 
 groups() ->
@@ -48,6 +49,17 @@ groups() ->
         ]},
         {commercial, [], [
             build_info_product_test
+        ]},
+        {core_metrics, [], [
+                                     queue_consumer_count_single_vhost_per_object_test,
+                                     queue_consumer_count_all_vhosts_per_object_test,
+                                     queue_consumer_count_aggregated_test,
+                                     queue_coarse_metrics_aggregated_test,
+                                     queue_coarse_metrics_per_object_test,
+                                     queue_metrics_aggregated_test,
+                                     queue_metrics_per_object_test,
+                                     queue_consumer_count_and_queue_metrics_mutually_exclusive_test,
+                                     default_metrics_endpoint_does_core_metrics_filtering
         ]}
     ].
 
@@ -84,6 +96,72 @@ init_per_group(per_object_endpoint_metrics, Config0) ->
     ]},
     Config1 = rabbit_ct_helpers:merge_app_env(Config0, PathConfig),
     init_per_group(aggregated_metrics, Config1);
+init_per_group(core_metrics, Config0) ->
+    FilterEnv = {rabbitmq_prometheus, [{core_metrics_default_vhosts, [<<"vhost-2">>]},
+                                       {core_metrics_default_families, [queue_coarse_metrics]}]},
+
+    Config1 = init_per_group(core_metrics, rabbit_ct_helpers:merge_app_env(Config0, FilterEnv), []),
+
+    rabbit_ct_broker_helpers:add_vhost(Config1, 0, <<"vhost-1">>, <<"guest">>),
+    rabbit_ct_broker_helpers:set_full_permissions(Config1, <<"vhost-1">>),
+    VHost1Conn = rabbit_ct_client_helpers:open_unmanaged_connection(Config1, 0, <<"vhost-1">>),
+    {ok, VHost1Ch} = amqp_connection:open_channel(VHost1Conn),
+
+    rabbit_ct_broker_helpers:add_vhost(Config1, 0, <<"vhost-2">>, <<"guest">>),
+    rabbit_ct_broker_helpers:set_full_permissions(Config1, <<"vhost-2">>),
+    VHost2Conn = rabbit_ct_client_helpers:open_unmanaged_connection(Config1, 0, <<"vhost-2">>),
+    {ok, VHost2Ch} = amqp_connection:open_channel(VHost2Conn),
+
+    DefaultCh = rabbit_ct_client_helpers:open_channel(Config1),
+
+    [
+     (fun () ->
+              QPart = case VHost of
+                          <<"/">> -> <<"default">>;
+                          _ -> VHost
+                      end,
+              QName = << QPart/binary, "-", Q/binary>>,
+              #'queue.declare_ok'{} = amqp_channel:call(Ch,
+                                                        #'queue.declare'{queue = QName,
+                                                                         durable = true
+
+                                                                        }),
+              lists:foreach( fun (_) ->
+                                     amqp_channel:cast(Ch,
+                                                       #'basic.publish'{routing_key = QName},
+                                                       #amqp_msg{payload = <<"msg">>})
+                             end, lists:seq(1, MsgNum) )
+      end)()
+     || {VHost, Ch, MsgNum} <- [{<<"/">>, DefaultCh, 3}, {<<"vhost-1">>, VHost1Ch, 7}, {<<"vhost-2">>, VHost2Ch, 11}],
+        Q <- [ <<"queue-with-messages">>, <<"queue-with-consumer">> ]
+    ],
+
+    DefaultConsumer = sleeping_consumer(),
+    #'basic.consume_ok'{consumer_tag = DefaultCTag} =
+        amqp_channel:subscribe(DefaultCh, #'basic.consume'{queue = <<"default-queue-with-consumer">>}, DefaultConsumer),
+
+    VHost1Consumer = sleeping_consumer(),
+    #'basic.consume_ok'{consumer_tag = VHost1CTag} =
+        amqp_channel:subscribe(VHost1Ch, #'basic.consume'{queue = <<"vhost-1-queue-with-consumer">>}, VHost1Consumer),
+
+    VHost2Consumer = sleeping_consumer(),
+    #'basic.consume_ok'{consumer_tag = VHost2CTag} =
+        amqp_channel:subscribe(VHost2Ch, #'basic.consume'{queue = <<"vhost-2-queue-with-consumer">>}, VHost2Consumer),
+
+    timer:sleep(10000),
+
+    Config1 ++ [ {default_consumer_pid, DefaultConsumer}
+               , {default_consumer_ctag, DefaultCTag}
+               , {default_channel, DefaultCh}
+               , {vhost1_consumer_pid, VHost1Consumer}
+               , {vhost1_consumer_ctag, VHost1CTag}
+               , {vhost1_channel, VHost1Ch}
+               , {vhost1_conn, VHost1Conn}
+               , {vhost2_consumer_pid, VHost2Consumer}
+               , {vhost2_consumer_ctag, VHost2CTag}
+               , {vhost2_channel, VHost2Ch}
+               , {vhost2_conn, VHost2Conn}
+               ];
 init_per_group(aggregated_metrics, Config0) ->
     Config1 = rabbit_ct_helpers:merge_app_env(
         Config0,
@@ -137,6 +215,28 @@ end_per_group(aggregated_metrics, Config) ->
     amqp_channel:call(Ch, #'queue.delete'{queue = ?config(queue_name, Config)}),
     rabbit_ct_client_helpers:close_channel(Ch),
     end_per_group_(Config);
+
+end_per_group(core_metrics, Config) ->
+    DefaultCh = ?config(default_channel, Config),
+    amqp_channel:call(DefaultCh, #'basic.cancel'{consumer_tag = ?config(default_consumer_ctag, Config)}),
+    ?config(default_consumer_pid, Config) ! stop,
+    rabbit_ct_client_helpers:close_channel(DefaultCh),
+
+    VHost1Ch = ?config(vhost1_channel, Config),
+    amqp_channel:call(VHost1Ch, #'basic.cancel'{consumer_tag = ?config(vhost1_consumer_ctag, Config)}),
+    ?config(vhost1_consumer_pid, Config) ! stop,
+    amqp_channel:close(VHost1Ch),
+    amqp_connection:close(?config(vhost1_conn, Config)),
+
+    VHost2Ch = ?config(vhost2_channel, Config),
+    amqp_channel:call(VHost2Ch, #'basic.cancel'{consumer_tag = ?config(vhost2_consumer_ctag, Config)}),
+    ?config(vhost2_consumer_pid, Config) ! stop,
+    amqp_channel:close(VHost2Ch),
+    amqp_connection:close(?config(vhost2_conn, Config)),
+
+    %% Delete queues?
+    end_per_group_(Config);
+
 end_per_group(_, Config) ->
     end_per_group_(Config).
 
@@ -315,6 +415,131 @@ global_metrics_single_metric_family_test(Config) ->
     {match, MetricFamilyMatches} = re:run(Body, "TYPE rabbitmq_global_messages_acknowledged_total", [global]),
     ?assertEqual(1, length(MetricFamilyMatches)).
 
+queue_consumer_count_single_vhost_per_object_test(Config) ->
+    {_, Body} = http_get_with_pal(Config, "/metrics/core?vhost=vhost-1&family=queue_consumer_count&per-object=1", [], 200),
+
+    %% There should be exactly 2 metrics returned (2 queues in that vhost, `queue_consumer_count` has only single metric)
+    ?assertEqual(#{rabbitmq_queue_consumers =>
+                       #{#{queue => "vhost-1-queue-with-consumer",vhost => "vhost-1"} => [1],
+                         #{queue => "vhost-1-queue-with-messages",vhost => "vhost-1"} => [0]}},
+                 parse_response(Body)),
+    ok.
+
+queue_consumer_count_all_vhosts_per_object_test(Config) ->
+    Expected = #{rabbitmq_queue_consumers =>
+                     #{#{queue => "vhost-1-queue-with-consumer",vhost => "vhost-1"} => [1],
+                       #{queue => "vhost-1-queue-with-messages",vhost => "vhost-1"} => [0],
+                       #{queue => "vhost-2-queue-with-consumer",vhost => "vhost-2"} => [1],
+                       #{queue => "vhost-2-queue-with-messages",vhost => "vhost-2"} => [0],
+                       #{queue => "default-queue-with-consumer",vhost => "/"} => [1],
+                       #{queue => "default-queue-with-messages",vhost => "/"} => [0]}},
+
+    %% No vhost given, all should be returned
+    {_, Body1} = http_get_with_pal(Config, "/metrics/core?family=queue_consumer_count&per-object=1", [], 200),
+    ?assertEqual(Expected, parse_response(Body1)),
+
+    %% Both vhosts are listed explicitly
+    {_, Body2} = http_get_with_pal(Config, "/metrics/core?vhost=vhost-1&vhost=vhost-2&vhost=%2f&family=queue_consumer_count&per-object=1", [], 200),
+    ?assertEqual(Expected, parse_response(Body2)),
+    ok.
+
+queue_consumer_count_aggregated_test(Config) ->
+    %% Single vhost
+    {_, Body1} = http_get_with_pal(Config, "/metrics/core?vhost=vhost-1&family=queue_consumer_count", [], 200),
+    ?assertEqual(#{rabbitmq_queue_consumers => #{undefined => [1]}}, parse_response(Body1)),
+
+    %% All vhosts
+    {_, Body2} = http_get_with_pal(Config, "/metrics/core?family=queue_consumer_count", [], 200),
+    ?assertEqual(#{rabbitmq_queue_consumers => #{undefined => [3]}}, parse_response(Body2)),
+    ok.
+
+queue_coarse_metrics_aggregated_test(Config) ->
+    {_, Body1} = http_get_with_pal(Config, "/metrics/core?vhost=vhost-1&family=queue_coarse_metrics", [], 200),
+    ?assertEqual(#{undefined => [7 * 2]}, map_get(rabbitmq_queue_messages, parse_response(Body1))),
+
+    {_, Body2} = http_get_with_pal(Config, "/metrics/core?family=queue_coarse_metrics", [], 200),
+    ?assertEqual(#{undefined => [(3+7+11) * 2]}, map_get(rabbitmq_queue_messages, parse_response(Body2))),
+    ok.
+
+queue_coarse_metrics_per_object_test(Config) ->
+    Expected1 =  #{#{queue => "vhost-1-queue-with-consumer", vhost => "vhost-1"} => [7],
+                   #{queue => "vhost-1-queue-with-messages", vhost => "vhost-1"} => [7]},
+    Expected2 =  #{#{queue => "vhost-2-queue-with-consumer", vhost => "vhost-2"} => [11],
+                   #{queue => "vhost-2-queue-with-messages", vhost => "vhost-2"} => [11]},
+    ExpectedD =  #{#{queue => "default-queue-with-consumer", vhost => "/"} => [3],
+                   #{queue => "default-queue-with-messages", vhost => "/"} => [3]},
+
+    {_, Body1} = http_get_with_pal(Config, "/metrics/core?vhost=vhost-1&family=queue_coarse_metrics&per-object=true", [], 200),
+    ?assertEqual(Expected1,
+                 map_get(rabbitmq_queue_messages, parse_response(Body1))),
+
+    {_, Body2} = http_get_with_pal(Config, "/metrics/core?family=queue_coarse_metrics&per-object=true", [], 200),
+    ?assertEqual(lists:foldl(fun maps:merge/2, #{}, [Expected1, Expected2, ExpectedD]),
+                 map_get(rabbitmq_queue_messages, parse_response(Body2))),
+
+    {_, Body3} = http_get_with_pal(Config, "/metrics/core?vhost=vhost-1&vhost=vhost-2&family=queue_coarse_metrics&per-object=true", [], 200),
+    ?assertEqual(lists:foldl(fun maps:merge/2, #{}, [Expected1, Expected2]),
+                 map_get(rabbitmq_queue_messages, parse_response(Body3))),
+    ok.
+
+queue_metrics_aggregated_test(Config) ->
+    {_, Body1} = http_get_with_pal(Config, "/metrics/core?vhost=vhost-1&family=queue_metrics", [], 200),
+    ?assertEqual(#{undefined => [7 * 2]}, map_get(rabbitmq_queue_messages_ram, parse_response(Body1))),
+
+    {_, Body2} = http_get_with_pal(Config, "/metrics/core?family=queue_metrics", [], 200),
+    ?assertEqual(#{undefined => [(3+7+11) * 2]}, map_get(rabbitmq_queue_messages_ram, parse_response(Body2))),
+    ok.
+
+queue_metrics_per_object_test(Config) ->
+    Expected1 =  #{#{queue => "vhost-1-queue-with-consumer", vhost => "vhost-1"} => [7],
+                   #{queue => "vhost-1-queue-with-messages", vhost => "vhost-1"} => [7]},
+    Expected2 =  #{#{queue => "vhost-2-queue-with-consumer", vhost => "vhost-2"} => [11],
+                   #{queue => "vhost-2-queue-with-messages", vhost => "vhost-2"} => [11]},
+    ExpectedD =  #{#{queue => "default-queue-with-consumer", vhost => "/"} => [3],
+                   #{queue => "default-queue-with-messages", vhost => "/"} => [3]},
+    {_, Body1} = http_get_with_pal(Config, "/metrics/core?vhost=vhost-1&family=queue_metrics&per-object=true", [], 200),
+    ?assertEqual(Expected1,
+                 map_get(rabbitmq_queue_messages_ram, parse_response(Body1))),
+
+    {_, Body2} = http_get_with_pal(Config, "/metrics/core?family=queue_metrics&per-object=true", [], 200),
+    ?assertEqual(lists:foldl(fun maps:merge/2, #{}, [Expected1, Expected2, ExpectedD]),
+                 map_get(rabbitmq_queue_messages_ram, parse_response(Body2))),
+
+    {_, Body3} = http_get_with_pal(Config, "/metrics/core?vhost=vhost-1&vhost=vhost-2&family=queue_metrics&per-object=true", [], 200),
+    ?assertEqual(lists:foldl(fun maps:merge/2, #{}, [Expected1, Expected2]),
+                 map_get(rabbitmq_queue_messages_ram, parse_response(Body3))),
+    ok.
+
+queue_consumer_count_and_queue_metrics_mutually_exclusive_test(Config) ->
+    %% parse_response/1 will return [3,3] if mutual exclusion didn't work out for these 2 families
+    {_, Body1} = http_get_with_pal(Config, "/metrics/core?family=queue_consumer_count&family=queue_metrics", [], 200),
+    ?assertEqual(#{undefined => [3]}, map_get(rabbitmq_queue_consumers, parse_response(Body1))),
+
+    {_, Body2} = http_get_with_pal(Config, "/metrics/core?vhost=vhost-1&family=queue_consumer_count&family=queue_metrics&per-object=true", [], 200),
+    ?assertEqual(#{#{queue => "vhost-1-queue-with-consumer", vhost => "vhost-1"} => [1],
+                   #{queue => "vhost-1-queue-with-messages", vhost => "vhost-1"} => [0]},
+                 map_get(rabbitmq_queue_consumers, parse_response(Body2))),
+
+    ok.
+
+default_metrics_endpoint_does_core_metrics_filtering(Config) ->
+    {_, Body1} = http_get_with_pal(Config, "/metrics", [], 200),
+    Parsed1 = parse_response(Body1),
+    %% Only vhost-2 data
+    ?assertEqual(#{undefined => [11*2]}, map_get(rabbitmq_queue_messages, Parsed1)),
+    %% This one is from disabled metrics family
+    ?assertEqual(undefined, maps:get(rabbitmq_queue_consumers, Parsed1, undefined)),
+
+    Expected2 =  #{#{queue => "vhost-2-queue-with-consumer", vhost => "vhost-2"} => [11],
+                   #{queue => "vhost-2-queue-with-messages", vhost => "vhost-2"} => [11]},
+
+    {_, Body2} = http_get_with_pal(Config, "/metrics/per-object", [], 200),
+    Parsed2 = parse_response(Body2),
+    ?assertEqual(Expected2, map_get(rabbitmq_queue_messages, Parsed2)),
+    ?assertEqual(undefined, maps:get(rabbitmq_queue_consumers, Parsed2, undefined)),
+
+    ok.
+
 http_get(Config, ReqHeaders, CodeExp) ->
     Path = proplists:get_value(prometheus_path, Config, "/metrics"),
     http_get(Config, Path, ReqHeaders, CodeExp).
@@ -336,3 +561,43 @@ http_get_with_pal(Config, Path, ReqHeaders, CodeExp) ->
     %% Print and log response body - it makes is easier to find why a match failed
     ct:pal(Body),
     {Headers, Body}.
+
+parse_response(Body) ->
+    Lines = string:split(Body, "\n", all),
+    Metrics = [ parse_metric(L)
+                || L = [C|_] <- Lines, C /= $#
+              ],
+    lists:foldl(fun ({Metric, Label, Value}, MetricMap) ->
+                        case string:prefix(atom_to_list(Metric), "telemetry") of
+                            nomatch ->
+                                OldLabelMap = maps:get(Metric, MetricMap, #{}),
+                                OldValues = maps:get(Label, OldLabelMap, []),
+                                NewValues = [Value|OldValues],
+                                NewLabelMap = maps:put(Label, NewValues, OldLabelMap),
+                                maps:put(Metric, NewLabelMap, MetricMap);
+                            _ -> MetricMap
+                        end
+                end, #{}, Metrics).
+
+parse_metric(M) ->
+    case string:lexemes(M, "{}" ) of
+        [Metric, Label, Value] ->
+            {list_to_atom(Metric), parse_label(Label), parse_value(string:trim(Value))};
+        _ ->
+            [Metric, Value] = string:split(M, " "),
+            {list_to_atom(Metric), undefined, parse_value(string:trim(Value))}
+    end.
+
+parse_label(L) ->
+    Parts = string:split(L, ",", all),
+    maps:from_list([ parse_kv(P) || P <- Parts ]).
+
+parse_kv(KV) ->
+    [K, V] = string:split(KV, "="),
+    {list_to_atom(K), string:trim(V, both, [$"])}.
+
+parse_value(V) ->
+    case lists:all(fun (C) -> C >= $0 andalso C =< $9 end, V) of
+        true -> list_to_integer(V);
+        _ -> V
+    end.

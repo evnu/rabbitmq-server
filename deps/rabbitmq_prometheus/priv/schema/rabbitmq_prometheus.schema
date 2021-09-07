@@ -15,6 +15,9 @@
 {mapping, "prometheus.return_per_object_metrics", "rabbitmq_prometheus.return_per_object_metrics",
     [{datatype, {enum, [true, false]}}]}.
 
+%% families by default
+%% vhosts by default
+
 %% Endpoint path
 {mapping, "prometheus.path", "rabbitmq_prometheus.path",
     [{datatype, string}]}.
@@ -99,19 +102,19 @@
     [{datatype, atom}]}.
 
 {translation, "rabbitmq_prometheus.ssl_config.versions",
-fun(Conf) ->
+ fun(Conf) ->
     Settings = cuttlefish_variable:filter_by_prefix("prometheus.ssl.versions", Conf),
     [V || {_, V} <- Settings]
-end}.
+ end}.
 
 {mapping, "prometheus.ssl.ciphers.$cipher", "rabbitmq_prometheus.ssl_config.ciphers",
     [{datatype, string}]}.
 
 {translation, "rabbitmq_prometheus.ssl_config.ciphers",
-fun(Conf) ->
+ fun(Conf) ->
     Settings = cuttlefish_variable:filter_by_prefix("prometheus.ssl.ciphers", Conf),
     lists:reverse([V || {_, V} <- Settings])
-end}.
+ end}.
 
 {mapping, "prometheus.ssl.compress", "rabbitmq_prometheus.ssl_config.cowboy_opts.compress",
     [{datatype, {enum, [true, false]}}]}.
@@ -125,3 +128,43 @@ end}.
     [{datatype, integer}, {validators, ["non_negative_integer"]}]}.
 {mapping, "prometheus.ssl.max_keepalive", "rabbitmq_prometheus.ssl_config.cowboy_opts.max_keepalive",
     [{datatype, integer}, {validators, ["non_negative_integer"]}]}.
+
+{mapping, "prometheus.core_metrics.default_families.$num", "rabbitmq_prometheus.core_metrics_default_families",
+    [{datatype, {enum, [connection_churn_metrics, node_coarse_metrics, node_persister_metrics, ra_metrics,
+                        queue_coarse_metrics, queue_consumer_count, queue_metrics, channel_metrics,
+                        channel_exchange_metrics, channel_process_metrics, channel_queue_metrics,
+                        connection_coarse_metrics, connection_metrics, channel_queue_exchange_metrics,
+                        auth_attempt_metrics, auth_attempt_detailed_metrics]}}]}.
+
+{translation, "rabbitmq_prometheus.core_metrics_default_families",
+ fun(Conf) ->
+         Settings = cuttlefish_variable:filter_by_prefix("prometheus.core_metrics.default_families", Conf),
+         FamiliesWithPosition =
+             [ {case  catch list_to_integer(Num) of
+                    N when is_integer(N) -> N;
+                    Err ->
+                        cuttlefish:invalid(iolist_to_binary(io_lib:format("Metrics family position should be an integer ~p", [Err])))
+                end,
+                FamilyName}
+               || {["prometheus", "core_metrics", "default_families", Num], FamilyName} <- Settings],
+         Families = lists:map(fun ({_, N}) -> N end, lists:keysort(1, FamiliesWithPosition)),
+         Families
+ end}.
+
+{mapping, "prometheus.core_metrics.default_vhosts.$num", "rabbitmq_prometheus.core_metrics_default_vhosts",
+ [{datatype, string}]}.
+
+{translation, "rabbitmq_prometheus.core_metrics_default_vhosts",
+ fun(Conf) ->
+         Settings = cuttlefish_variable:filter_by_prefix("prometheus.core_metrics.default_vhosts", Conf),
+         VHostsWithPosition =
+             [ {case  catch list_to_integer(Num) of
+                    N when is_integer(N) -> N;
+                    Err ->
+                        cuttlefish:invalid(iolist_to_binary(io_lib:format("Prometheus exposed vhost position should be an integer ~p", [Err])))
+                end,
+                list_to_binary(VHost)}
+               || {["prometheus", "core_metrics", "default_vhosts", Num], VHost} <- Settings],
+         VHosts = lists:map(fun ({_, N}) -> N end, lists:keysort(1, VHostsWithPosition)),
+         VHosts
+ end}.
