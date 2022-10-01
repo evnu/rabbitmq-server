@@ -2446,14 +2446,9 @@ handle_frame_post_auth(Transport,
                 {?RESPONSE_CODE_STREAM_DOES_NOT_EXIST, <<0:32>>}
         end,
 
-    Frame =
-        <<?COMMAND_ROUTE:16,
-          ?VERSION_1:16,
-          CorrelationId:32,
-          ResponseCode:16,
-          StreamBin/binary>>,
-    FrameSize = byte_size(Frame),
-    Transport:send(S, <<FrameSize:32, Frame/binary>>),
+    Frame = rabbit_stream_core:frame({response, CorrelationId,
+                                      {route, ResponseCode, StreamBin}}),
+    send(Transport, S, Frame),
     {Connection, State};
 handle_frame_post_auth(Transport,
                        #stream_connection{socket = S,
@@ -2481,14 +2476,9 @@ handle_frame_post_auth(Transport,
                 {?RESPONSE_CODE_STREAM_DOES_NOT_EXIST, <<0:32>>}
         end,
 
-    Frame =
-        <<?COMMAND_PARTITIONS:16,
-          ?VERSION_1:16,
-          CorrelationId:32,
-          ResponseCode:16,
-          PartitionsBin/binary>>,
-    FrameSize = byte_size(Frame),
-    Transport:send(S, <<FrameSize:32, Frame/binary>>),
+    Frame = rabbit_stream_core:frame({response, CorrelationId,
+                                      {partitions, ResponseCode, PartitionsBin}}),
+    send(Transport, S, Frame),
     {Connection, State};
 handle_frame_post_auth(Transport,
                        #stream_connection{transport = ConnTransport,
